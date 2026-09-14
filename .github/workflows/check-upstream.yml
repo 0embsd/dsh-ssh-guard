@@ -42,7 +42,6 @@ jobs:
           ")"
           echo "integrated=${INTEGRATED}" >> "$GITHUB_OUTPUT"
           echo "仓库已集成：${INTEGRATED}"
-          if [ "${LATEST:-}" = "" ]; then :; fi
 
       - name: 判定是否需要提醒
         id: verdict
