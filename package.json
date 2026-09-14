@@ -1,0 +1,17 @@
+{
+  "name": "dsh-ssh-guard-toolchain",
+  "private": true,
+  "description": "Assembly line and quality gates for the dsh-ssh-guard DSH plugin (upstream: @linxin666/dsh-ssh, Apache-2.0)",
+  "type": "module",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "check": "node our/checks/precheck-eol.mjs",
+    "check:fix": "node our/checks/precheck-eol.mjs --fix",
+    "assemble": "node our/apply.mjs",
+    "bump": "node our/bump-upstream.mjs",
+    "test": "node our/tests/test-hostkey-guard.mjs && node our/tests/test-conn-budget.mjs"
+  }
+}

@@ -79,14 +79,14 @@ export function requireLiveGuard(repo = repoRoot()) {
   if (name === null) {
     throw new Error(
       `无法定位被测插件（活体验收不可信，已中止）\n  原因：${reason}\n  profile：${pkgPath}\n` +
-        `  期望：某个依赖的值为 "link:<本仓库>/dist"（先用 our/apply.ps1 装配，再把 dist 挂进该 profile）`,
+        `  期望：某个依赖的值为 "link:<本仓库>/dist"（先用 npm run assemble 装配，再把 dist 挂进该 profile）`,
     )
   }
   const guard = join(dshHome(), 'profiles', profileName(), 'node_modules', ...name.split('/'), 'lib', 'hostkey-guard.js')
   if (!existsSync(guard)) {
     throw new Error(
       `被测插件已挂载（${name}）但守卫文件不存在（活体验收不可信，已中止）\n  缺失：${guard}\n` +
-        `  可能原因：link: 指向的不是本仓库的 dist/，或 dist/ 尚未装配（跑 our/apply.ps1）`,
+        `  可能原因：link: 指向的不是本仓库的 dist/，或 dist/ 尚未装配（跑 npm run assemble）`,
     )
   }
   return { name, guard, pkgPath, reason }

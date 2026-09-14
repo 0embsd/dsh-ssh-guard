@@ -5,14 +5,14 @@
 
 ---
 
-## 一、装配线的三道门（由 `our/apply.ps1` 自动执行）
+## 一、装配线的三道门（由 `our/apply.mjs` 自动执行；npm run assemble）
 
 | 门 | 内容 | 拦什么 | 位置 |
 |---|---|---|---|
-| **⓪ 前置检查** | `.gitattributes` 有 `* -text`；本地 `core.autocrlf=false`；**所有跟踪文件为 LF** | "字节级复现"前提被破坏 → 产物哈希漂移 | `our/checks/precheck-eol.ps1` |
-| **③ 命中数断言** | 补丁落点标记出现次数 ≥ `manifest.json` 登记值 | `git apply` 报 rc=0 却**一处都没应用**（静默失败） | `apply.ps1` |
-| **④ 结果哈希断言** | 打完补丁后与登记值**逐文件同哈希** | 补丁落点漂移 / 内容被意外改动 / 行尾被转换 | `apply.ps1` |
-| **⑤ fork 改造断言** | 可执行代码里旧包名 = 0、遥测域名 = 0、心跳调用 = 0 | 改名/摘除漏项 | `apply.ps1` |
+| **⓪ 前置检查** | `.gitattributes` 有 `* -text`；本地 `core.autocrlf=false`；**所有跟踪文件为 LF** | "字节级复现"前提被破坏 → 产物哈希漂移 | `our/checks/precheck-eol.mjs` |
+| **③ 命中数断言** | 补丁落点标记出现次数 ≥ `manifest.json` 登记值 | `git apply` 报 rc=0 却**一处都没应用**（静默失败） | `apply.mjs` |
+| **④ 结果哈希断言** | 打完补丁后与登记值**逐文件同哈希** | 补丁落点漂移 / 内容被意外改动 / 行尾被转换 | `apply.mjs` |
+| **⑤ fork 改造断言** | 可执行代码里旧包名 = 0、遥测域名 = 0、心跳调用 = 0 | 改名/摘除漏项 | `apply.mjs` |
 
 任一不过 → **停止装配**（fail-closed）。宁可装不出来，也不要装出"看着对、指纹不对"的产物。
 
@@ -37,9 +37,9 @@
 
 | # | 规则 | 事故来源 | 检查方式 |
 |---|---|---|---|
-| **R1** | 外部命令**必查退出码并保留输出**；禁止对可能失败的命令用 `\| Out-Null` | 复核旧补丁时把 `git apply` 输出与 rc 吞掉，补丁静默失败，据此得出**错误结论** | 脚本里每个 `& cmd` 后都有 `$LASTEXITCODE` 判断；`apply.ps1` 的 ② 即是正面样板 |
+| **R1** | 外部命令**必查退出码并保留输出**；禁止丢弃可能失败命令的输出（PowerShell 的 Out-Null、Node 里吞掉 stderr 都算） | 复核旧补丁时把 `git apply` 输出与 rc 吞掉，补丁静默失败，据此得出**错误结论** | 脚本里每个 `& cmd` 后都有 `$LASTEXITCODE` 判断；`our/apply.mjs` 的 ② 即是正面样板 |
 | **R2** | 元组/接口解构**写全并显式命名**（`[, host, port]`），不要凭位置猜 | 自建测试夹具时把 `[alias, host, port]` 解构成 `[h, p]` → 生成 `[host-a]:192.0.2.10` 这种怪键，测试 21/21 变 11/10 | 写完立刻 `node <test>`；新增夹具必须跑一遍 |
-| **R3** | "逐字节复现"类操作**显式声明行尾前提**：克隆/检出用 `-c core.autocrlf=false`，仓库放 `.gitattributes * -text`，装配前跑 ⓪ | `git clone` 因系统级 `autocrlf=true` 把 97/99 个文件变 CRLF → 哈希漂移 | `our/checks/precheck-eol.ps1`（门禁） |
+| **R3** | "逐字节复现"类操作**显式声明行尾前提**：克隆/检出用 `-c core.autocrlf=false`，仓库放 `.gitattributes * -text`，装配前跑 ⓪ | `git clone` 因系统级 `autocrlf=true` 把 97/99 个文件变 CRLF → 哈希漂移 | `our/checks/precheck-eol.mjs`（门禁） |
 | **R4** | 改**被哈希断言覆盖的文件**前，先算影响面、同步登记 `manifest.json`，并提前说明 | 改了补丁里 `index.js` 一行注释 → ④ 立刻拦下（机制正确，但我没预告） | `manifest.json` 的 `files` + `reRegisteredNote` |
 | **R5** | 脱敏 = **模式扫描 + 逐条复核**，零命中才算完；模式至少含：绝对路径、私网/保留网段、内部编号 `\b[A-Z]\d{1,3}\b`、人称词、真实主机名 | 第一遍只按关键词黑名单扫，漏了内部编号与人称词，被迫二次返工 | 交付前跑一次全仓终扫并把命中数写进提交说明 |
 | **R6** | 要写进结论的**事实**，至少两种方法交叉验证 | 用 `-SimpleMatch` 配正则转义串查 `known_hosts`，假 0 命中，**错误事实写进了汇报** | 计数 + 打印命中行 双验；口径写清 |
@@ -74,8 +74,8 @@
 
 **一条命令**，步骤由脚本固化、期望值由脚本按实测写入（人不参与登记，杜绝抄错）：
 
-```powershell
-pwsh -NoProfile -File .\our\bump-upstream.ps1 -Version <新版>
+```bash
+node our/bump-upstream.mjs --version <新版>
 ```
 
 | 脚本步骤 | 对应门禁 / 规则 |

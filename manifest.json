@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "purpose": "A′ 装配线的期望值登记。markers = 命中数断言（专防 `git apply` 报 rc=0 却一处都没应用的静默失败）；files = 结果哈希（补丁后、fork 改造前的逐文件哈希，必须与已验收产物一致）。升级新版本时：先 `apply.ps1 -Version <新> -NoAssert` 跑通 → 人工核对差异 → 跑 tests/ → 再按实测值重新登记本文件。",
+  "purpose": "A′ 装配线的期望值登记。markers = 命中数断言（专防 `git apply` 报 rc=0 却一处都没应用的静默失败）；files = 结果哈希（补丁后、fork 改造前的逐文件哈希，必须与已验收产物一致）。升级新版本时：先 `node our/apply.mjs --version <新> --no-assert` 跑通 → 人工核对差异 → 跑 tests/ → 再按实测值重新登记本文件。",
   "versions": {
     "0.3.14": {
       "basedOn": "npm @linxin666/dsh-ssh@0.3.14（产物+源码原样 vendored 于 upstream/0.3.14）",

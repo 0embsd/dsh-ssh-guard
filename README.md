@@ -13,9 +13,9 @@
         │  + patch\ 里的增量补丁
         ▼
 本仓库 / 装配线     仓库名 = dsh-ssh-guard                  ← 车间（本仓库就是它）
-        │  our\apply.ps1 装配（五道断言）
+        │  npm run assemble（our/apply.mjs，五道断言）
         ▼
-分发的插件包        包名 = dsh-ssh-guard                    ← 成品（dist\ → link: 挂载）
+分发的插件包        包名 = dsh-ssh-guard                    ← 成品（dist/ → link: 挂载）
                    版本 = <上游版本>-guard.1
 ```
 
@@ -33,22 +33,21 @@
 
 两个模块的设计原则：**要么排队复用同一条连接，要么明确失败** —— 不"再开一条"，也不静默降级。
 
-## 装配（从源码构建 `dist\`）
+## 装配（从源码构建 `dist/`）
 
-```powershell
+```bash
 git clone <本仓库> ~/.dsh/tools/dsh-ssh-guard
 cd ~/.dsh/tools/dsh-ssh-guard
-pwsh -NoProfile -File .\our\apply.ps1           # 产出 dist\（五道断言必须全过）
-node .\our\tests\test-hostkey-guard.mjs         # 21 例
-node .\our\tests\test-conn-budget.mjs           # 20 例
+npm run assemble        # 产出 dist/（行尾前置门禁 + 五道断言 + 依赖自包含）
+npm test                # 回归：21 hostkey + 20 budget
 ```
 
-可选参数：`-RepoUrl <你的仓库地址>` `-Author <你的名字>`（写入 `dist\package.json` 的归属字段；
-不传则**删掉**上游遗留的 `repository` 指向）；`-Version <上游版本>`；`-NoAssert`（升级专用）。
+可选参数：`--repo-url <你的仓库地址>` `--author <你的名字>`（写入 `dist/package.json` 的归属字段；
+不传则**删掉**上游遗留的 `repository` 指向）；`--version <上游版本>`；`--no-assert`（升级专用）。
 
 ## 挂载到 DSH profile
 
-profile 的 `package.json` 里用 `link:` 指向本仓库的 **`dist\`**，并把包名登记进 `dsh.profile.bundles`：
+profile 的 `package.json` 里用 `link:` 指向本仓库的 **`dist/`**，并把包名登记进 `dsh.profile.bundles`：
 
 ```jsonc
 {
@@ -94,7 +93,7 @@ dsh-ssh-guard/
 ├── our/
 │   ├── conn-budget.js      本仓库的模块（与补丁内容一致，供审阅）
 │   ├── hostkey-guard.js    本仓库的模块（同上）
-│   ├── apply.ps1           装配脚本（五道断言 + 依赖自包含）
+│   ├── apply.mjs           装配脚本（Node；行尾门禁 + 五道断言 + 依赖自包含）
 │   └── tests/              回归用例：21 hostkey + 20 budget + 活体/波形/探针脚本
 ├── manifest.json      每个上游版本的期望值（命中数 + 结果哈希）
 ├── UPGRADE.md         跟上游的升级手册
@@ -106,8 +105,8 @@ dsh-ssh-guard/
 1. **`patches/` 补丁与 `link:` 自建包不许同时生效** —— 同名工具会被注册两次，直接崩掉整个 profile。
    切换必须**一步到位 + 重启**。
 2. **`link:` 的包必须自带 `node_modules`**：ESM 按**真实路径**解析（符号链接会被展开），
-   从 `dist\` 往上**永远到不了** profile 的 `node_modules` →
-   ① 运行期依赖（`ssh2` / `ws` / `@xterm/*`）必须装进 `dist\node_modules`；
+   从 `dist/` 往上**永远到不了** profile 的 `node_modules` →
+   ① 运行期依赖（`ssh2` / `ws` / `@xterm/*`）必须装进 `dist/node_modules`；
    ② 宿主提供的 `@deepseek-ai/dsh-*`（peer）必须以 junction 链进同一处。
    装配脚本 **⑤.5 步**自动做这两件事；缺任何一个都会在启动时报 `ERR_MODULE_NOT_FOUND`。
 3. **切换后必须跑真服务式探针验收**：`dsh --profile <档> --port 0 --no-open`，
@@ -131,8 +130,8 @@ dsh-ssh-guard/
 
 跟版是**一条命令**：
 
-```powershell
-pwsh -NoProfile -File .\our\bump-upstream.ps1 -Version <新版>
+```bash
+npm run bump -- --version <新版>
 ```
 
 它自动完成：取官方包 → vendored → 复制补丁 → `--check`（打不上即报警）→ 按实测值登记

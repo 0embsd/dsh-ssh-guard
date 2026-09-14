@@ -3,17 +3,17 @@
 > 目标：上游发新版时，**用装配线跟上去，并且有东西替我们报警**——不存在"零成本自动跟随"。
 
 > **一条命令（推荐，2026-09-14 起）**
-> ```powershell
-> pwsh -NoProfile -File .\our\bump-upstream.ps1 -Version <新版>
+> ```bash
+> npm run bump -- --version <新版>
 > ```
 > 它把下面 ①–⑧ 全部固化：取官方包 → vendored → 复制补丁为新版命名 → `--check`
-> （**打不上就在这里报警**）→ 按**实测值**自动登记 `manifest.json` → 更新 `apply.ps1`
+> （**打不上就在这里报警**）→ 按**实测值**自动登记 `manifest.json` → 更新 `apply.mjs`
 > 默认版本 → 装配（⓪ + 五道断言）→ 回归（21/21 + 20/20）。
 > 幂等：已集成过的版本再跑一次 = 只复验。下面的手工步骤保留为**脚本不可用时的等价流程**。
 
 ## 一、跟一版上游（标准流程）
 
-```powershell
+```bash
 # ① 取新版官方包（npm 可达即可，不需要 GitHub）
 cd <临时工作目录>                      # 任意空目录
 npm pack '@linxin666/dsh-ssh@<新版>'  # 例：0.3.21
@@ -27,7 +27,7 @@ tar -xzf linxin666-dsh-ssh-<新版>.tgz
 #    然后修补丁的落点（上游改动会导致 context 失效）
 
 # ④ 先跳过哈希断言装配，看命中数断言怎么报
-pwsh -NoProfile -File .\our\apply.ps1 -Version <新版> -NoAssert
+node our/apply.mjs --version <新版> --no-assert
 #    · 若 ③ 命中数断言报错 → 说明补丁落点变了（**这就是我们要的报警**）→ 按报错修补丁
 #    · 若全过 → 继续
 
@@ -36,9 +36,9 @@ node .\our\tests\test-hostkey-guard.mjs      # 期望 21/21
 node .\our\tests\test-conn-budget.mjs        # 期望 20/20
 
 # ⑥ 核对差异并重新登记期望值
-#    · 用 tool 对比 dist\ 与 upstream\<新版>\：只有我们那 3 个文件应不同
+#    · 用工具对比 dist/ 与 upstream/<新版>/：只有我们那 3 个文件应不同
 #    · 把新的命中数与三个文件的新 sha256 写进 manifest.json → versions.<新版>
-pwsh -NoProfile -File .\our\apply.ps1 -Version <新版>   # 这次带全断言，必须全过
+node our/apply.mjs --version <新版>   # 这次带全断言，必须全过
 
 # ⑦ 真服务式探针验收（先在非生产档，别直接上生产）
 dsh --profile <staging-profile> --port 0 --no-open      # 看到 `dsh web: http://…` 即通过；随后停掉
@@ -73,7 +73,7 @@ dsh --profile <staging-profile> --port 0 --no-open      # 看到 `dsh web: http:
 需要上游 **git 仓库**（构建配置 `tsconfig.build.json` / tsdown 配置**只在仓库里，npm 包故意不带**——
 S0 实测：`npm run build` → `TS5058: tsconfig.build.json 不存在`）。届时：
 
-```powershell
+```bash
 git clone https://github.com/zhu1090093659/dsh-web.git   # 需要 GitHub 可达
 # 把我们的两处改动移植到 src/（TS）作为独立提交 → pnpm i → pnpm build → 与 npm 产物逐文件比对
 # 一致 → 升级变成 `git fetch upstream && git merge`（git 替我们合代码）
