@@ -1,0 +1,9 @@
+# 装配产物，不入库（由 our\apply.ps1 生成）
+dist/
+
+# 上游 vendored 的 node_modules（我们只 vendored 产物+源码，不该有）
+upstream/**/node_modules/
+
+# 临时
+*.tgz
+*.log

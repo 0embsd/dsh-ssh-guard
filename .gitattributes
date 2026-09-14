@@ -1,0 +1,7 @@
+# 本仓库的装配产物必须**逐字节可复现**，因此禁止 git 做任何行尾转换。
+#
+# 为什么需要这个文件：Git for Windows 的**系统级** `core.autocrlf=true`（本机实测）会在
+# clone/checkout 时把 vendored 上游从 LF 改成 CRLF → 装配产物"内容一字不差、哈希却不同"，
+# 直接触发 apply.ps1 的 ④ 结果哈希断言（2026-09-13 克隆派生的仓库时实测踩过）。
+# `-text` 表示"不做行尾转换"，diff/merge 仍然照常工作。
+* -text

@@ -1,0 +1,56 @@
+{
+  "schema": 1,
+  "purpose": "A′ 装配线的期望值登记。markers = 命中数断言（专防 `git apply` 报 rc=0 却一处都没应用的静默失败）；files = 结果哈希（补丁后、fork 改造前的逐文件哈希，必须与已验收产物一致）。升级新版本时：先 `apply.ps1 -Version <新> -NoAssert` 跑通 → 人工核对差异 → 跑 tests/ → 再按实测值重新登记本文件。",
+  "versions": {
+    "0.3.14": {
+      "basedOn": "npm @linxin666/dsh-ssh@0.3.14（产物+源码原样 vendored 于 upstream/0.3.14）",
+      "patch": "patch/@linxin666__dsh-ssh@0.3.14.patch",
+      "registeredAt": "2026-09-13",
+      "reRegisteredNote": "2026-09-13 开源化改造时重新登记：补丁里三处**注释**被中性化（去掉私有包装脚本名与内部事实编号），因此结果哈希相对上一版变化。已逐行核对：新旧产物的差异**仅为这三行注释**，无逻辑改动。另：本仓库禁用 git 行尾转换（.gitattributes `* -text`）——系统级 core.autocrlf=true 会把 vendored 上游变成 CRLF，导致哈希漂移。",
+      "markers": [
+        { "file": "lib/index.js", "pattern": "makeHostVerifier", "min": 2 },
+        { "file": "lib/index.js", "pattern": "createBudget", "min": 3 },
+        { "file": "lib/index.js", "pattern": "conn-budget.js", "min": 1 },
+        { "file": "lib/conn-budget.js", "pattern": "maxConcurrentPerHost", "min": 9 },
+        { "file": "lib/hostkey-guard.js", "pattern": "known_hosts", "min": 7 }
+      ],
+      "files": {
+        "lib/index.js": "8dfb5d734194b2f0173df4485cddddba99d5402595bed69d55f24b1f056c0706",
+        "lib/conn-budget.js": "3f4034960bc4cae742e0f995d66a9be13b0a5dad215bd5e2493c7e86c0cafb5a",
+        "lib/hostkey-guard.js": "8c1d3ed7842d95b9081a38a09bc7e25be3ec388c8346c3970c92393679cebf03"
+      },
+      "upstreamCleanCheck": {
+        "note": "上游干净版里这些标记必须为 0、且两个新文件不存在 —— 用于证明『这两处加固是下游新增』",
+        "lib/index.js:makeHostVerifier": 0,
+        "lib/index.js:createBudget": 0,
+        "lib/conn-budget.js:exists": false,
+        "lib/hostkey-guard.js:exists": false
+      }
+    },
+    "0.3.21": {
+      "basedOn": "npm @linxin666/dsh-ssh@0.3.21（产物+源码原样 vendored 于 upstream/0.3.21）",
+      "patch": "patch/@linxin666__dsh-ssh@0.3.21.patch",
+      "registeredAt": "2026-09-13",
+      "upgradeNote": "2026-09-13 从 0.3.14 跟到 0.3.21：0.3.14 的补丁在 0.3.21 上 `git apply --check` 6/6 hunk 全过（仅位置偏移 2–442 行），补丁文件按新版重命名为 @linxin666__dsh-ssh@0.3.21.patch，内容未改。已核对：① 上游 0.3.21 仍保留心跳调用与遥测域名（fork 改造前提未变）；② 上游干净版里 makeHostVerifier/createBudget 均为 0、两个新文件不存在；③ 两个新增文件（conn-budget.js / hostkey-guard.js）的哈希与 0.3.14 完全一致——它们与上游版本无关，这本身是一条交叉验证。偏移较大处已逐处确认语义落点（见 patch 的 hunk 上下文）。",
+      "markers": [
+        { "file": "lib/index.js", "pattern": "makeHostVerifier", "min": 2 },
+        { "file": "lib/index.js", "pattern": "createBudget", "min": 3 },
+        { "file": "lib/index.js", "pattern": "conn-budget.js", "min": 1 },
+        { "file": "lib/conn-budget.js", "pattern": "maxConcurrentPerHost", "min": 9 },
+        { "file": "lib/hostkey-guard.js", "pattern": "known_hosts", "min": 7 }
+      ],
+      "files": {
+        "lib/index.js": "8f733b6bc75fdb216102adefb9b4035d26923030c33ab384cac75c85d7232c6e",
+        "lib/conn-budget.js": "3f4034960bc4cae742e0f995d66a9be13b0a5dad215bd5e2493c7e86c0cafb5a",
+        "lib/hostkey-guard.js": "8c1d3ed7842d95b9081a38a09bc7e25be3ec388c8346c3970c92393679cebf03"
+      },
+      "upstreamCleanCheck": {
+        "note": "上游干净版里这些标记必须为 0、且两个新文件不存在 —— 用于证明『这两处加固是下游新增』",
+        "lib/index.js:makeHostVerifier": 0,
+        "lib/index.js:createBudget": 0,
+        "lib/conn-budget.js:exists": false,
+        "lib/hostkey-guard.js:exists": false
+      }
+    }
+  }
+}
