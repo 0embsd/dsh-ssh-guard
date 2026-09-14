@@ -1,0 +1,124 @@
+name: integrate-upstream
+
+# L2「自动装配 + 开 PR」：定时或手动触发，跑完整跟版流程；**只推分支 + 开 PR，绝不直接改 main**。
+# 为什么用 CI 模式（--no-host-link）：GitHub runner 上没有本机的 DSH 安装树，无法把
+# @deepseek-ai/dsh-tools 链进 dist/node_modules；跳过该步后，行尾门禁、五道断言（含结果哈希）、
+# 单测仍然全部执行 —— 也就是说"产物是否与登记值逐字节一致"在 CI 里照样被验证。
+# 完整可挂载的 dist 仍由使用者在本地装配（见 README「安装到 DSH」）。
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '要集成的上游版本（留空 = 自动取 npm 最新版）'
+        required: false
+        default: ''
+  schedule:
+    - cron: '0 2 * * 1' # 每周一 02:00 UTC（在 check-upstream 之后）
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: integrate-upstream
+  cancel-in-progress: false
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: 决定目标版本并判断是否需要集成
+        id: plan
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          set -euo pipefail
+          INTEGRATED="$(node -e "
+            const m = JSON.parse(require('node:fs').readFileSync('manifest.json','utf8'));
+            const cmp = (a,b) => { const A=a.split('.').map(Number), B=b.split('.').map(Number);
+              for (let i=0;i<3;i++){ const x=A[i]||0, y=B[i]||0; if (x!==y) return x-y } return 0 };
+            console.log(Object.keys(m.versions).sort(cmp).pop());
+          ")"
+          V="${INPUT_VERSION}"
+          if [ -z "${V}" ]; then V="$(npm view @linxin666/dsh-ssh version)"; fi
+          echo "integrated=${INTEGRATED}" >> "$GITHUB_OUTPUT"
+          echo "version=${V}" >> "$GITHUB_OUTPUT"
+          if [ "${V}" = "${INTEGRATED}" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "无需集成：目标 ${V} 已集成"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "将集成：${V}（当前 ${INTEGRATED}）"
+          fi
+
+      - name: 集成上游（CI 模式）
+        if: steps.plan.outputs.skip == 'false'
+        run: |
+          set -euo pipefail
+          node our/bump-upstream.mjs --version "${{ steps.plan.outputs.version }}" --no-host-link
+
+      - name: 复查：产物不得含旧包名 / 遥测域名 / 心跳调用（独立于装配线再验一次）
+        if: steps.plan.outputs.skip == 'false'
+        run: |
+          set -euo pipefail
+          node -e "
+            const fs = require('node:fs');
+            const bad = [];
+            const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) =>
+              e.isDirectory() ? walk(d + '/' + e.name) : [d + '/' + e.name]);
+            for (const f of walk('dist/lib')) {
+              const t = fs.readFileSync(f, 'utf8');
+              if (t.includes('@linxin666/dsh-ssh')) bad.push(f + ': 旧包名');
+              if (f.endsWith('.js')) {
+                if (t.includes('dsh-market.com')) bad.push(f + ': 遥测域名');
+                if (t.includes('reportDailyHeartbeat([')) bad.push(f + ': 心跳调用');
+              }
+            }
+            if (bad.length) { console.error(bad.join('\n')); process.exit(1) }
+            console.log('独立复查通过：旧包名 / 遥测域名 / 心跳调用 均为 0');
+          "
+
+      - name: 推分支并开 PR（不合并）
+        if: steps.plan.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.plan.outputs.version }}
+          INTEGRATED: ${{ steps.plan.outputs.integrated }}
+        run: |
+          set -euo pipefail
+          BRANCH="chore/upstream-${VERSION}"
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "${BRANCH}"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "没有可提交的改动（可能是幂等复跑），结束"
+            exit 0
+          fi
+          git commit -m "chore(upstream): 集成 ${VERSION}"
+          git push -u origin "${BRANCH}"
+          gh pr create \
+            --base main \
+            --head "${BRANCH}" \
+            --title "chore(upstream): 集成 ${VERSION}" \
+            --body "$(printf '%s\n' \
+              "自动集成上游 \`@linxin666/dsh-ssh@${VERSION}\`（此前为 ${INTEGRATED}）。" \
+              '' \
+              '本 PR 由 `.github/workflows/integrate-upstream.yml` 生成，**未自动合并**。' \
+              '' \
+              '改动内容：' \
+              '- `upstream/'"${VERSION}"'/`：vendored 官方包' \
+              '- `patch/@linxin666__dsh-ssh@'"${VERSION}"'.patch`：上一版补丁原样复制' \
+              '- `manifest.json`：新增期望值（命中数 + 逐文件 sha256，按实测自动登记）' \
+              '- `our/apply.mjs`：默认版本指向新版' \
+              '' \
+              '合并前请确认：① 工作流里五道断言与回归全绿；② `--check` 的 hunk 偏移是否需要人工核对语义落点。' \
+              '合并后若要上生产：在本机跑 `npm run assemble`（含宿主链接）→ 切档 → 重启。')"

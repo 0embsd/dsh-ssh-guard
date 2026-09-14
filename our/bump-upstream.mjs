@@ -37,6 +37,8 @@ const WORK_DIR = resolve(String(args['work-dir'] ?? join(tmpdir(), 'dsh-ssh-guar
 const SKIP_ASSEMBLE = args['skip-assemble'] === true
 const SKIP_TESTS = args['skip-tests'] === true
 const FORCE = args.force === true
+// CI 模式：透传给 apply.mjs（GitHub runner 上没有本机 DSH 安装树，无法链宿主包）
+const NO_HOST_LINK = args['no-host-link'] === true
 
 const upDir = join(REPO, 'upstream', VERSION)
 const patchNew = join(REPO, 'patch', `@linxin666__dsh-ssh@${VERSION}.patch`)
@@ -209,7 +211,9 @@ else {
 // ── ⑦ 装配 + 回归 ──────────────────────────────────────────────────────────
 if (!SKIP_ASSEMBLE) {
   step(8, '跑装配线（⓪ + 五道断言 + 依赖自包含）')
-  const r = tryRun(process.execPath, [applyMjs, '--version', VERSION])
+  const argv = [applyMjs, '--version', VERSION]
+  if (NO_HOST_LINK) argv.push('--no-host-link')
+  const r = tryRun(process.execPath, argv)
   process.stdout.write(r.out)
   if (r.code !== 0) die('装配失败 —— 见上方断言输出（期望值已登记，可据此定位）')
   ok('装配全过')

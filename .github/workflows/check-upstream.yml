@@ -1,0 +1,96 @@
+name: check-upstream
+
+# L1「自动报信」：定时检查上游 npm 是否有新版本，有就开一个 Issue 提醒（**不改代码、不发布**）。
+# 为什么只报信不自动改：装配线的价值在于"期望值按实测登记 + 五道断言"，人只需要在被提醒后
+# 跑一条命令；让机器人直接改主分支会把"改动可见性"吃掉。要更自动请看 integrate-upstream.yml。
+on:
+  schedule:
+    - cron: '0 1 * * 1' # 每周一 01:00 UTC
+  workflow_dispatch: # 也可以手动点一下
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: 读取上游最新版
+        id: upstream
+        run: |
+          set -euo pipefail
+          LATEST="$(npm view @linxin666/dsh-ssh version)"
+          echo "latest=${LATEST}" >> "$GITHUB_OUTPUT"
+          echo "上游最新版：${LATEST}"
+
+      - name: 与仓库已集成版本比对
+        id: local
+        run: |
+          set -euo pipefail
+          INTEGRATED="$(node -e "
+            const m = JSON.parse(require('node:fs').readFileSync('manifest.json','utf8'));
+            const cmp = (a,b) => { const A=a.split('.').map(Number), B=b.split('.').map(Number);
+              for (let i=0;i<3;i++){ const x=A[i]||0, y=B[i]||0; if (x!==y) return x-y } return 0 };
+            console.log(Object.keys(m.versions).sort(cmp).pop());
+          ")"
+          echo "integrated=${INTEGRATED}" >> "$GITHUB_OUTPUT"
+          echo "仓库已集成：${INTEGRATED}"
+          if [ "${LATEST:-}" = "" ]; then :; fi
+
+      - name: 判定是否需要提醒
+        id: verdict
+        env:
+          LATEST: ${{ steps.upstream.outputs.latest }}
+          INTEGRATED: ${{ steps.local.outputs.integrated }}
+        run: |
+          set -euo pipefail
+          if [ "${LATEST}" = "${INTEGRATED}" ]; then
+            echo "need=false" >> "$GITHUB_OUTPUT"
+            echo "已是最新，无需提醒"
+          else
+            echo "need=true" >> "$GITHUB_OUTPUT"
+            echo "发现新版本：${LATEST}（当前 ${INTEGRATED}）"
+          fi
+
+      - name: 有新版则开 Issue（同名未关闭的 Issue 不重复开）
+        if: steps.verdict.outputs.need == 'true'
+        uses: actions/github-script@v7
+        env:
+          LATEST: ${{ steps.upstream.outputs.latest }}
+          INTEGRATED: ${{ steps.local.outputs.integrated }}
+        with:
+          script: |
+            const latest = process.env.LATEST
+            const integrated = process.env.INTEGRATED
+            const title = `上游有新版本：${latest}（当前已集成 ${integrated}）`
+            const { owner, repo } = context.repo
+            const { data: open } = await github.rest.issues.listForRepo({ owner, repo, state: 'open', per_page: 100 })
+            if (open.some((i) => i.title === title)) {
+              core.info('已存在同名 Issue，跳过')
+              return
+            }
+            const body = [
+              `上游 \`@linxin666/dsh-ssh\` 发布了 **${latest}**，本仓库当前集成到 **${integrated}**。`,
+              '',
+              '跟进方式（一条命令）：',
+              '',
+              '```bash',
+              `npm run bump -- --version ${latest}`,
+              '```',
+              '',
+              '该命令会自动：取官方包 → vendored 到 `upstream/` → 复制补丁 → 在新版上 `--check`（打不上就在这里报警）',
+              '→ 按实测值登记 `manifest.json` → 重新装配（行尾门禁 + 五道断言）→ 跑回归。',
+              '',
+              '若 `--check` 失败：说明上游改了补丁落点附近的结构，需要人工修补丁上下文后重跑（脚本会打印"这就是报警"）。',
+              '',
+              '_本 Issue 由 `.github/workflows/check-upstream.yml` 自动创建。_',
+            ].join('\n')
+            await github.rest.issues.create({ owner, repo, title, body })
+            core.info(`已创建 Issue：${title}`)

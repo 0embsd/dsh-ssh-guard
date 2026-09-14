@@ -12,6 +12,7 @@
     "check:fix": "node our/checks/precheck-eol.mjs --fix",
     "assemble": "node our/apply.mjs",
     "bump": "node our/bump-upstream.mjs",
+    "smoke": "node our/checks/install-smoke.mjs",
     "test": "node our/tests/test-hostkey-guard.mjs && node our/tests/test-conn-budget.mjs"
   }
 }

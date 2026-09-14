@@ -33,7 +33,62 @@
 
 两个模块的设计原则：**要么排队复用同一条连接，要么明确失败** —— 不"再开一条"，也不静默降级。
 
-## 装配（从源码构建 `dist/`）
+## 安装到 DSH
+
+> **为什么仓库里没有 `dist/`（成品）？** 本仓库是**装配车间**：`dist/` 是构建产物，内含
+> `node_modules` 与**指向你本机 DSH 安装树**的符号链接（第 5.5 步），因此既不该入库、
+> 也不可能对每台机器通用。请按下面对应的路线安装。
+
+### 路线 A：从源码构建 + 本地挂载（当前唯一自足的方式）
+
+```bash
+git clone https://github.com/0embsd/dsh-ssh-guard
+# 或：从本仓库页面右上角 Code 按钮复制地址（fork 后请换成你自己的地址）
+cd dsh-ssh-guard
+npm run assemble        # 需要 Node 22+；第 5.5 步会链接你本机的 DSH 宿主包
+npm run smoke           # 推荐：自动建临时档验证「能装、能加载」
+dsh plugin --profile <你的档> add link:$PWD/dist
+```
+
+`dsh plugin … add` 会**同时**把依赖写进 `dependencies`、并把包名登记进 `dsh.profile.bundles`（已实测），
+所以这一条命令就够。装完**重启该档的 DSH**，侧边栏即出现「SSH」入口。
+
+> ⚠️ 若该档里已装了别的 SSH 插件（如同名工具集的 `dsh-ssh-ops`，或上游 `@linxin666/dsh-ssh`），
+> 必须先移除/禁用其中一个 —— 同名工具重复注册会让整个 profile 起不来。
+
+### 路线 B：从 npm 安装（**尚未发布**）
+
+```bash
+dsh plugin --profile <你的档> add dsh-ssh-guard
+```
+
+这是对使用者最省事的方式，但需要先把这个包**发布到 npm**（见「自动化」的 L3）。
+**这就是现在还没有"一行安装命令"的原因** —— 不是忘了写文档，而是发布这一步还没做。
+
+### 路线 C：GitHub Release 附件（不需要 npm 账号）
+
+由 GitHub Actions 构建 `dist/` 并打成 tar.gz 挂到 Release；使用者下载解包后：
+
+```bash
+dsh plugin --profile <你的档> add link:<解包目录>
+```
+
+（需要一个 release 工作流来启用，见「自动化」。）
+
+### 安装冒烟测试（一条命令）
+
+**"装配能跑"不等于"装得上"** —— 装配产物再漂亮，若挂载路径、包名或宿主链接有一处不对，
+用户装上去就是加载失败（与"验收脚本从未跑过"同型的风险）。所以本仓库把它做成可重复的一条命令：
+
+```bash
+npm run smoke
+```
+
+它会在一个**临时档**里走完真实安装路径：建档 → `dsh plugin … add link:<dist>` → 核对链接与包身份
+→ **真启动一次**（`--port 0 --no-open`）→ 再**打插件自身的路由** `/api/dsh-ssh/hosts` 确认
+**插件真的被加载**（只验"服务器起来了"会假绿）→ 杀进程树 → 删除临时档。加 `--keep` 保留临时档便于排查。
+
+## 装配（从源码构建 `dist/`）（开发者；使用者请看上面的「安装到 DSH」）
 
 ```bash
 git clone <本仓库> ~/.dsh/tools/dsh-ssh-guard
@@ -88,13 +143,19 @@ profile 的 `package.json` 里用 `link:` 指向本仓库的 **`dist/`**，并�
 
 ```
 dsh-ssh-guard/
+├── package.json       工具链入口：npm run check / check:fix / assemble / bump / smoke / test
 ├── upstream/0.3.14/   上游发布物原样 vendored（lib 产物 + src 源码 + LICENSE + cordis.patch.yml）
 ├── patch/             本仓库的增量（唯一真相）：@linxin666__dsh-ssh@0.3.14.patch
 ├── our/
+│   ├── lib/util.mjs        公共工具（外部命令 / 文本 / 哈希 / 符号链接 / 日志）
+│   ├── checks/             行尾前置门禁 precheck-eol.mjs、活体定位器 live-target.mjs、安装冒烟 install-smoke.mjs
 │   ├── conn-budget.js      本仓库的模块（与补丁内容一致，供审阅）
 │   ├── hostkey-guard.js    本仓库的模块（同上）
 │   ├── apply.mjs           装配脚本（Node；行尾门禁 + 五道断言 + 依赖自包含）
+│   ├── bump-upstream.mjs   跟版脚本（一条命令集成上游新版）
 │   └── tests/              回归用例：21 hostkey + 20 budget + 活体/波形/探针脚本
+├── .github/workflows/  自动化：check-upstream（报信）+ integrate-upstream（自动装配开 PR）
+├── docs/QUALITY-GATES.md  三道门 + 验收三原则 + 作业规则 + 事故档案
 ├── manifest.json      每个上游版本的期望值（命中数 + 结果哈希）
 ├── UPGRADE.md         跟上游的升级手册
 └── dist/              ★ 装配产物 —— 这才是 `link:` 的挂载目标（不入库）
@@ -112,6 +173,25 @@ dsh-ssh-guard/
 3. **切换后必须跑真服务式探针验收**：`dsh --profile <档> --port 0 --no-open`，
    看到 `dsh web: http://…` 即通过。
 4. **命中数断言不许绕过** —— 它是唯一能发现"`git apply` 报成功却一处都没应用"的东西。
+5. **"装配能跑"不等于"装得上"** —— 改过装配线、包名或依赖后跑一次 `npm run smoke`；
+   它验到"插件自身的路由返回非 404"为止（只验服务器起来了会**假绿**）。
+
+## 自动化（GitHub Actions）
+
+| 工作流 | 触发 | 做什么 |
+|---|---|---|
+| `check-upstream.yml`（L1 报信） | 每周一 + 手动 | 查上游 npm 是否有新版；有就**开 Issue**提醒（不改代码、不发布） |
+| `integrate-upstream.yml`（L2 装配+PR） | 每周一 + 手动 | 跑完整跟版流程 → **推分支 + 开 PR**（**绝不直接改 main、绝不自动合并**） |
+
+**为什么 L2 要用 `--no-host-link`**：GitHub 的 runner 上没有你本机的 DSH 安装树，无法把
+`@deepseek-ai/dsh-tools` 链进 `dist/node_modules`。打开该开关只跳过这一步，**行尾门禁、五道断言
+（含结果哈希）、单测仍然全跑** —— 也就是说"产物是否与登记值逐字节一致"在 CI 里照样被验证。
+完整可挂载的 `dist` 仍由使用者在本地装配（路线 A）。
+
+**还没做的一层（L3 自动发布）**：
+- `npm publish` 到 npm → 使用者就能 `dsh plugin add dsh-ssh-guard`（需要你的 npm 账号 + token 存进 GitHub Secrets）
+- 或：Actions 构建 `dist` 打成 tar.gz 挂到 GitHub Release（用自带 `GITHUB_TOKEN`，**不需要 npm 账号**），
+  对应「路线 C」
 
 ## 许可与归属
 

@@ -48,6 +48,10 @@ const AUTHOR = String(args.author ?? '')
 const NO_FORK = args['no-fork'] === true
 const KEEP_HEARTBEAT = args['keep-heartbeat'] === true
 const REFRESH_DEPS = args['refresh-deps'] === true
+// CI 模式：GitHub Actions 的 runner 上没有本机的 DSH 安装树，无法把宿主包链进 dist/node_modules。
+// 打开本开关则**跳过宿主链接**，其余步骤（⓪ 门禁、五道断言、依赖自包含的 npm 部分、归属/声明）照跑，
+// 因此"产物哈希等价性"在 CI 里依然被验证；完整可挂载的 dist 仍在本机装配时产出。
+const NO_HOST_LINK = args['no-host-link'] === true
 const QUIET = args.quiet === true
 
 /** 宿主 DSH 安装树：Windows 走 %APPDATA%，其他平台走 npm 全局根。 */
@@ -243,12 +247,15 @@ if (!NO_FORK) {
     walkLib(libDir).filter((p) => p.endsWith('.js'))
       .flatMap((p) => [...readText(p).matchAll(/from "(@deepseek-ai\/[^"]+)"/g)].map((m) => m[1])),
   )]
-  for (const imp of hostImports) {
-    const target = join(DSH_INSTALL, 'node_modules', ...imp.split('/'))
-    if (!existsSync(target)) die(`宿主包找不到：${imp}（期望在 ${target}）——link: 挂载会解析失败`)
-    const link = join(nm, ...imp.split('/'))
-    if (linkDir(target, link)) depInfo.hostLinked.push(imp)
-    else depInfo.hostLinked.push(imp)
+  if (NO_HOST_LINK) {
+    warn(`按 --no-host-link 跳过宿主 peer 链接（CI 模式）：${hostImports.join(', ')} —— 该 dist 仅用于验证哈希与断言，**挂载前请在本机重新装配**`)
+  } else {
+    for (const imp of hostImports) {
+      const target = join(DSH_INSTALL, 'node_modules', ...imp.split('/'))
+      if (!existsSync(target)) die(`宿主包找不到：${imp}（期望在 ${target}）——link: 挂载会解析失败`)
+      linkDir(target, join(nm, ...imp.split('/')))
+      depInfo.hostLinked.push(imp)
+    }
   }
   ok(`npm 依赖 ${depInfo.npmInstalled.length} 个（${depInfo.npmInstalled.join('/')}）+ 宿主 peer ${depInfo.hostLinked.length} 个（${depInfo.hostLinked.join('/')}）`)
 
