@@ -31,6 +31,25 @@ const HEALTH = String(args.health ?? 'http://127.0.0.1:3080/dsh-health')
 const WAIT_MS = Number(args['wait-ms'] ?? 180000)
 const IS_WIN = process.platform === 'win32'
 
+// --log <路径>：把输出同时以 **UTF-8** 写入文件。
+// 为什么不靠 shell 重定向：Node 写 UTF-8，而 PowerShell 重定向会按控制台代码页（如 GBK）解码，
+// 中文会变成乱码（2026-09-14 实测）。自己写文件则编码可控。
+const LOG = args.log ? resolve(String(args.log)) : null
+if (LOG) {
+  const { writeFileSync, appendFileSync, mkdirSync } = await import('node:fs')
+  const { dirname } = await import('node:path')
+  mkdirSync(dirname(LOG), { recursive: true })
+  writeFileSync(LOG, '', 'utf8')
+  const tee = (orig) => (...a) => {
+    const s = a.map((x) => (typeof x === 'string' ? x : String(x))).join(' ')
+    orig(s)
+    try { appendFileSync(LOG, s + '\n', 'utf8') } catch { /* 忽略写日志失败 */ }
+  }
+  console.log = tee(console.log.bind(console))
+  console.error = tee(console.error.bind(console))
+  console.log(`[log] UTF-8 日志：${LOG}`)
+}
+
 if (!DRY && !YES) die('真要执行请显式加 --yes（并请以独立进程启动本脚本）；只预演请加 --dry-run')
 
 /** 找出正在跑的 dsh web 宿主（按命令行匹配，不误杀别的 node 进程）。 */
@@ -51,7 +70,10 @@ function findHosts() {
 }
 
 function killHost(p) {
-  if (IS_WIN) tryRun('taskkill', ['/F', '/T', '/PID', String(p.pid)])
+  // **不要加 /T**（真实事故 · 2026-09-14）：本脚本通常是从 DSH 进程树里派生出来的
+  // （DSH → pwsh → 分离的 powershell → 本脚本），`taskkill /F /T` 会把整棵树一起杀掉，
+  // 于是"刚杀完宿主，脚本自己也死了"——升级半途而废、宿主一直停着。只结束宿主本身即可。
+  if (IS_WIN) tryRun('taskkill', ['/F', '/PID', String(p.pid)])
   else try { process.kill(p.pid, 'SIGKILL') } catch { /* 已退出 */ }
 }
 
