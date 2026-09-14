@@ -18,26 +18,37 @@
 //   node our/checks/install-smoke.mjs --keep          # 保留临时档（排查用）
 //   node our/checks/install-smoke.mjs --repo <path>   # 指定仓库根（默认本文件所在仓库）
 // 退出码：0 = 安装并加载成功；1 = 任一步失败
-import { existsSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, writeFileSync, rmSync, readFileSync, lstatSync, realpathSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { join, resolve } from 'node:path'
 import { homedir } from 'node:os'
-import { repoRoot, readText, tryRun, parseArgs, step, ok, warn, info, die } from '../lib/util.mjs'
+import { repoRoot, readText, tryRun, run, parseArgs, step, ok, warn, info, die } from '../lib/util.mjs'
 
 const args = parseArgs()
 const REPO = resolve(args.repo ?? repoRoot())
 const PROFILE = String(args.profile ?? 'dsh-ssh-guard-smoke')
 const KEEP = args.keep === true
+// --tgz <路径>：按「下载一个打包好的 tgz 直接安装」来测（对应 README 的路线 C）。
+// 与 link: 的关键差别：tgz 会被 pnpm 解到 profile 自己的 .pnpm 存储里，**真实路径仍在 profile 内**，
+// 因此 ESM 向上解析能找到 profiles/node_modules/@deepseek-ai/dsh-tools —— **不需要宿主链接**。
+const TGZ = args.tgz ? resolve(String(args.tgz)) : null
 const WAIT_MS = Number(args['wait-ms'] ?? 90000)
 const DSH_HOME = process.env.DSH_HOME ?? join(homedir(), '.dsh')
 const DIST = join(REPO, 'dist')
 const PROFILE_DIR = join(DSH_HOME, 'profiles', PROFILE)
 
-// ── ① dist 是否已装配 ───────────────────────────────────────────────────────
-step(1, '检查 dist/ 是否已装配')
-if (!existsSync(join(DIST, 'package.json'))) die(`未找到 ${DIST}/package.json —— 先在本仓库跑：npm run assemble`)
-const distPkg = JSON.parse(readText(join(DIST, 'package.json')))
-ok(`dist 就位：${distPkg.name}@${distPkg.version}`)
+// ── ① 待安装的产物是否就位 ──────────────────────────────────────────────────
+step(1, TGZ ? '检查 tgz 是否就位' : '检查 dist/ 是否已装配')
+let distPkg
+if (TGZ) {
+  if (!existsSync(TGZ)) die(`未找到 tgz：${TGZ}`)
+  distPkg = JSON.parse(run('tar', ['-xzOf', TGZ, 'package/package.json']))
+  ok(`tgz 就位：${TGZ.split(/[\\/]/).pop()} → ${distPkg.name}@${distPkg.version}`)
+} else {
+  if (!existsSync(join(DIST, 'package.json'))) die(`未找到 ${DIST}/package.json —— 先在本仓库跑：npm run assemble`)
+  distPkg = JSON.parse(readText(join(DIST, 'package.json')))
+  ok(`dist 就位：${distPkg.name}@${distPkg.version}`)
+}
 
 // ── ② 建临时 profile（只有官方 base + web-app，插件用下面的 add 命令装）──────
 step(2, `建临时 profile：${PROFILE}`)
@@ -48,7 +59,15 @@ const profileJson = {
   dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'] } },
 }
 writeFileSync(join(PROFILE_DIR, 'package.json'), JSON.stringify(profileJson, null, 2) + '\n', 'utf8')
-ok(`已写 ${join(PROFILE_DIR, 'package.json')}（仅 base + web-app）`)
+// 真实档需要这一条：npm/tgz 安装会**真的去装运行期依赖**（ssh2 / cpu-features 带构建脚本），
+// pnpm 默认不信任构建脚本 → 报 ERR_PNPM_IGNORED_BUILDS。官方 profile 的 pnpm-workspace.yaml
+// 里同样有 allowBuilds（这也是「从 npm 装」与「link: 装」的一个真实差别）。
+writeFileSync(
+  join(PROFILE_DIR, 'pnpm-workspace.yaml'),
+  ['packages:', '  - .', 'autoInstallPeers: false', 'allowBuilds:', '  cpu-features: true', '  ssh2: true', ''].join('\n'),
+  'utf8',
+)
+ok(`已写 ${join(PROFILE_DIR, 'package.json')} 与 pnpm-workspace.yaml（allowBuilds: cpu-features / ssh2）`)
 
 let failed = false
 function cleanup() {
@@ -68,7 +87,7 @@ function cleanup() {
 // Windows 上 dsh 是 .cmd，必须经 shell；此时**把整条命令作为一个字符串**传（不要同时给 args 数组），
 // 否则 Node 会报 DEP0190 弃用警告（shell + args 只做拼接、不转义）。
 const IS_WIN = process.platform === 'win32'
-const linkSpec = `link:${DIST.replace(/\\/g, '/')}`
+const linkSpec = TGZ ? `file:${TGZ.replace(/\\/g, '/')}` : `link:${DIST.replace(/\\/g, '/')}`
 step(3, `安装：dsh plugin --profile ${PROFILE} add ${linkSpec}`)
 const addArgs = ['plugin', '--profile', PROFILE, 'add', linkSpec]
 const inst = IS_WIN
@@ -100,6 +119,14 @@ if (linkedPkg.name !== distPkg.name || linkedPkg.version !== distPkg.version) {
   die(`链接指向的包身份不符：期望 ${distPkg.name}@${distPkg.version}，实际 ${linkedPkg.name}@${linkedPkg.version}`)
 }
 ok(`链接就位：${linkedPkg.name}@${linkedPkg.version}`)
+
+// 关键结构差异（这决定了"要不要自带宿主包链接"）：
+//   · link: 的真实路径在 profile **之外** → ESM 向上解析永远到不了 profiles/node_modules → 必须自带 @deepseek-ai/* 链接
+//   · tgz/npm 装进 profile 自己的 .pnpm 存储 → 真实路径仍在 profile **之内** → 能向上解析到 profiles/node_modules
+const real = realpathSync(linked)
+const insideProfile = real.toLowerCase().startsWith(PROFILE_DIR.toLowerCase())
+info(`真实路径：${real}`)
+info(`是否在 profile 内：${insideProfile}  →  ${insideProfile ? '不需要自带宿主链接' : '必须自带宿主链接（link: 场景）'}`)
 
 // ── ⑤ 真启动一次，等到监听行 ────────────────────────────────────────────────
 step(5, `真启动探针：dsh --profile ${PROFILE} --port 0 --no-open（最多等 ${Math.round(WAIT_MS / 1000)} 秒）`)

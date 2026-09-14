@@ -75,6 +75,55 @@ dsh plugin --profile <你的档> add link:<解包目录>
 
 （需要一个 release 工作流来启用，见「自动化」。）
 
+**已实测的更好做法（推荐用于路线 C）**：Release 里放的是 **`npm pack` 出来的 `.tgz`**（不是在解包目录上 `link:`），
+使用者一条命令装：
+
+```bash
+dsh plugin --profile <你的档> add file:<下载路径>/dsh-ssh-guard-<版本>.tgz
+```
+
+**为什么 tgz 比 `link:` 好**：tgz 会被 pnpm 解到**该档自己的** `node_modules/.pnpm/`，真实路径仍在档内 →
+ESM 能向上解析到 `profiles/node_modules/@deepseek-ai/dsh-tools`，所以 **CI 模式（`--no-host-link`）产出的包也能直接装**，
+不需要任何人本机装配。实测（`0.3.22-guard.1`）：安装成功 → 真启动 → `GET /api/dsh-ssh/hosts` 返回 **200**。
+
+> ⚠️ **从 npm/tgz 安装的必需前提**：它会**真的去装运行期依赖**（`ssh2` / `cpu-features` 带构建脚本），
+> 而 pnpm 默认不信任构建脚本 → 报 `ERR_PNPM_IGNORED_BUILDS`。该档的 `pnpm-workspace.yaml` 需要：
+>
+> ```yaml
+> allowBuilds:
+>   cpu-features: true
+>   ssh2: true
+> ```
+>
+> （官方 profile 本来就有这两行；本仓库的冒烟档也照此写。`link:` 路线不需要，因为它不装依赖 ——
+> 这也正是「从 npm 装」与「`link:` 装」的一个真实差别。）
+
+### 与上游安装方式的对照（为什么两边不一样）
+
+上游 `@linxin666/dsh-ssh` 的 README 给的是：
+
+```sh
+# npm（推荐）
+dsh plugin --profile web add @linxin666/dsh-ssh@latest
+# 从仓库（开发）
+git clone https://github.com/zhu1090093659/dsh-web.git && cd dsh-web
+pnpm install && pnpm -r build
+dsh plugin --profile web add link:$(pwd)/packages/dsh-ssh
+```
+
+对照如下 —— **路线结构其实一样（npm / 从仓库两条），差别只在"成品在哪"**：
+
+| | 上游 | 本仓库 | 原因 |
+|---|---|---|---|
+| **npm 路线** | ✅ 有 | ⏳ 待发布（路线 B） | 上游把**预构建**的 `lib/**` 打进 npm 包（`files` 字段），装完即用；我们的产物必须先"装配"（打补丁+改名+摘遥测） |
+| **从仓库路线** | `pnpm -r build` → `add link:packages/dsh-ssh` | `npm run assemble` → `add link:dist` | 上游是 **monorepo**，`packages/dsh-ssh` **本身就是可挂载包**（package.json 带 `main`/`exports`/`dsh.bundle.patch`）；我们是**单插件改造层**，仓库根是工具链（`private: true`，没有那些字段），可挂载的是**产物 `dist/`** |
+| **为什么要构建** | 只是把 TS 编译成 JS | 还要打补丁、改名、摘遥测 | 我们的产物 ≠ 上游产物 |
+| **要不要宿主链接** | 不需要 | `link:` 时需要；**npm/tgz 时不需要** | ESM 按**真实路径**解析：`link:` 的真实路径在档外，向上永远到不了 `profiles/node_modules` |
+| **发布形态** | npm 包内含构建产物 | `dist/` 不入库（含机器相关链接，无法通用） | 见本节开头说明 |
+
+**一句话**：上游发布的是"**装好的整机**"，我们目前提供的是"**车间 + 图纸 + 装配线**"；
+把 `dist` 发到 npm（路线 B）或做成 Release 的 `.tgz`（路线 C），使用者体验就能和上游**完全一致**。
+
 ### 安装冒烟测试（一条命令）
 
 **"装配能跑"不等于"装得上"** —— 装配产物再漂亮，若挂载路径、包名或宿主链接有一处不对，
