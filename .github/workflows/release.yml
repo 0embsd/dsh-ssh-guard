@@ -1,0 +1,149 @@
+name: release
+
+# L3「打包发布」：把装配产物打成 npm 形式的 .tgz 挂到 GitHub Release。
+# 为什么用 tgz 而不是 zip/目录：见 README「路线 C」——tgz 会被 pnpm 解到**使用者自己档内的**
+# node_modules/.pnpm/ 里，真实路径仍在档内，因此 ESM 能向上解析到 profiles/node_modules/@deepseek-ai/*，
+# **不需要**装配时那条「宿主链接」。于是 CI 用 --no-host-link 产出的包，使用者可以直接装。
+#
+# 触发：
+#   · 手动（推荐）：Actions → release → Run workflow，可留空版本号（自动取 manifest 里已集成的最新版）
+#   · 打 tag：`git tag v0.3.22 && git push origin v0.3.22`
+# 说明：本工作流**不需要任何 npm 账号**，只用仓库自带的 GITHUB_TOKEN。
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '要发布的版本（留空 = manifest 里已集成的最新版）'
+        required: false
+        default: ''
+
+permissions:
+  contents: write # 需要建 Release 并上传资产
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: 决定要发布的版本
+        id: plan
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          set -euo pipefail
+          V="${INPUT_VERSION}"
+          if [ -z "${V}" ]; then
+            if [ "${GITHUB_REF_TYPE}" = "tag" ]; then V="${GITHUB_REF_NAME#v}"; fi
+          fi
+          if [ -z "${V}" ]; then
+            V="$(node -e "
+              const m = JSON.parse(require('node:fs').readFileSync('manifest.json','utf8'));
+              const cmp = (a,b) => { const A=a.split('.').map(Number), B=b.split('.').map(Number);
+                for (let i=0;i<3;i++){ const x=A[i]||0, y=B[i]||0; if (x!==y) return x-y } return 0 };
+              console.log(Object.keys(m.versions).sort(cmp).pop());
+            ")"
+          fi
+          INTEGRATED="$(node -e "
+            const m = JSON.parse(require('node:fs').readFileSync('manifest.json','utf8'));
+            console.log(Object.prototype.hasOwnProperty.call(m.versions, '${V}') ? 'yes' : 'no');
+          ")"
+          echo "version=${V}" >> "$GITHUB_OUTPUT"
+          echo "integrated=${INTEGRATED}" >> "$GITHUB_OUTPUT"
+          echo "将发布：${V}（已在仓库中集成：${INTEGRATED}）"
+
+      - name: 若目标版本尚未集成，先集成（CI 模式）
+        if: steps.plan.outputs.integrated == 'no'
+        run: |
+          set -euo pipefail
+          node our/bump-upstream.mjs --version "${{ steps.plan.outputs.version }}" --no-host-link
+
+      - name: 装配（CI 模式：不建宿主链接，其余门禁与五道断言照跑）
+        if: steps.plan.outputs.integrated == 'yes'
+        run: |
+          set -euo pipefail
+          node our/apply.mjs --version "${{ steps.plan.outputs.version }}" --no-host-link
+
+      - name: 独立复查（产物不得含旧包名 / 遥测域名 / 心跳调用）
+        run: |
+          set -euo pipefail
+          node -e "
+            const fs = require('node:fs');
+            const bad = [];
+            const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) =>
+              e.isDirectory() ? walk(d + '/' + e.name) : [d + '/' + e.name]);
+            for (const f of walk('dist/lib')) {
+              const t = fs.readFileSync(f, 'utf8');
+              if (t.includes('@linxin666/dsh-ssh')) bad.push(f + ': 旧包名');
+              if (f.endsWith('.js')) {
+                if (t.includes('dsh-market.com')) bad.push(f + ': 遥测域名');
+                if (t.includes('reportDailyHeartbeat([')) bad.push(f + ': 心跳调用');
+              }
+            }
+            if (bad.length) { console.error(bad.join('\n')); process.exit(1) }
+            console.log('独立复查通过');
+          "
+
+      - name: 回归测试
+        run: node our/tests/test-hostkey-guard.mjs && node our/tests/test-conn-budget.mjs
+
+      - name: 打包（npm pack → .tgz，不含 node_modules）
+        id: pack
+        run: |
+          set -euo pipefail
+          cd dist
+          TGZ="$(npm pack --silent | tail -n 1)"
+          echo "tgz=${TGZ}" >> "$GITHUB_OUTPUT"
+          ls -lh "${TGZ}"
+          cd ..
+          echo "path=dist/${TGZ}" >> "$GITHUB_OUTPUT"
+
+      - name: 断言 tgz 里没有 node_modules（否则会把开发机的东西带出去）
+        run: |
+          set -euo pipefail
+          if tar -tzf "${{ steps.pack.outputs.path }}" | grep -q '^package/node_modules/'; then
+            echo "::error::tgz 里含 node_modules，拒绝发布"; exit 1
+          fi
+          echo "tgz 内容干净（无 node_modules）"
+
+      - name: 建 Release 并上传 tgz
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: |
+          set -euo pipefail
+          TAG="v${VERSION}"
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            echo "Release ${TAG} 已存在，改为上传/覆盖资产"
+            gh release upload "${TAG}" "${{ steps.pack.outputs.path }}" --clobber
+          else
+            gh release create "${TAG}" "${{ steps.pack.outputs.path }}" \
+              --title "dsh-ssh-guard ${VERSION}-guard.1" \
+              --notes "$(printf '%s\n' \
+                "基于上游 \`@linxin666/dsh-ssh@${VERSION}\`（Apache-2.0）的装配产物。" \
+                '' \
+                '安装（零构建）：' \
+                '' \
+                '```bash' \
+                "# 1) 下载下面的 dsh-ssh-guard-*.tgz" \
+                "# 2) 安装（把 <下载路径> 换成实际路径）" \
+                'dsh plugin --profile <你的档> add file:<下载路径>/dsh-ssh-guard-'"${VERSION}"'-guard.1.tgz' \
+                '```' \
+                '' \
+                '⚠️ 该档的 `pnpm-workspace.yaml` 需要（否则 pnpm 会拒绝 ssh2/cpu-features 的构建脚本）：' \
+                '' \
+                '```yaml' \
+                'allowBuilds:' \
+                '  cpu-features: true' \
+                '  ssh2: true' \
+                '```' \
+                '' \
+                '详见仓库 README「安装到 DSH」。')"
+          fi

@@ -2,6 +2,31 @@
   "schema": 1,
   "purpose": "A′ 装配线的期望值登记。markers = 命中数断言（专防 `git apply` 报 rc=0 却一处都没应用的静默失败）；files = 结果哈希（补丁后、fork 改造前的逐文件哈希，必须与已验收产物一致）。升级新版本时：先 `node our/apply.mjs --version <新> --no-assert` 跑通 → 人工核对差异 → 跑 tests/ → 再按实测值重新登记本文件。",
   "versions": {
+    "0.3.22": {
+      "basedOn": "npm @linxin666/dsh-ssh@0.3.22（产物+源码原样 vendored 于 upstream/0.3.22）",
+      "patch": "patch/@linxin666__dsh-ssh@0.3.22.patch",
+      "registeredAt": "2026-09-14",
+      "upgradeNote": "由 our/bump-upstream.mjs 于 2026-09-14 03:15 自动登记：vendored 自 npm @linxin666/dsh-ssh@0.3.22；补丁为上一版原样复制后在新版上 --check 通过（补丁含 8 个 hunk）；期望值取自同一棵补丁后的树（命中数 + 逐文件 sha256）。",
+      "markers": [
+        { "file": "lib/index.js", "pattern": "makeHostVerifier", "min": 2 },
+        { "file": "lib/index.js", "pattern": "createBudget", "min": 3 },
+        { "file": "lib/index.js", "pattern": "conn-budget.js", "min": 1 },
+        { "file": "lib/conn-budget.js", "pattern": "maxConcurrentPerHost", "min": 9 },
+        { "file": "lib/hostkey-guard.js", "pattern": "known_hosts", "min": 7 }
+      ],
+      "files": {
+        "lib/index.js": "8f733b6bc75fdb216102adefb9b4035d26923030c33ab384cac75c85d7232c6e",
+        "lib/conn-budget.js": "3f4034960bc4cae742e0f995d66a9be13b0a5dad215bd5e2493c7e86c0cafb5a",
+        "lib/hostkey-guard.js": "8c1d3ed7842d95b9081a38a09bc7e25be3ec388c8346c3970c92393679cebf03"
+      },
+      "upstreamCleanCheck": {
+        "note": "上游干净版里这些标记必须为 0、且两个新文件不存在 —— 用于证明『这两处加固是下游新增』",
+        "lib/index.js:makeHostVerifier": 0,
+        "lib/index.js:createBudget": 0,
+        "lib/conn-budget.js:exists": false,
+        "lib/hostkey-guard.js:exists": false
+      }
+    },
     "0.3.14": {
       "basedOn": "npm @linxin666/dsh-ssh@0.3.14（产物+源码原样 vendored 于 upstream/0.3.14）",
       "patch": "patch/@linxin666__dsh-ssh@0.3.14.patch",

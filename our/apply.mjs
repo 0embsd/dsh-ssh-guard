@@ -39,7 +39,7 @@ import {
 
 const args = parseArgs()
 const REPO = repoRoot()
-const VERSION = String(args.version ?? '0.3.21')
+const VERSION = String(args.version ?? '0.3.22')
 const NO_ASSERT = args['no-assert'] === true
 const FORK_NAME = String(args['fork-name'] ?? 'dsh-ssh-guard')
 const FORK_SUFFIX = String(args['version-suffix'] ?? '-guard.1')

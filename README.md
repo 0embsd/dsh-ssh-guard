@@ -42,7 +42,7 @@
 ### 路线 A：从源码构建 + 本地挂载（当前唯一自足的方式）
 
 ```bash
-git clone https://github.com/0embsd/dsh-ssh-guard
+git clone <本仓库地址>
 # 或：从本仓库页面右上角 Code 按钮复制地址（fork 后请换成你自己的地址）
 cd dsh-ssh-guard
 npm run assemble        # 需要 Node 22+；第 5.5 步会链接你本机的 DSH 宿主包
@@ -67,20 +67,17 @@ dsh plugin --profile <你的档> add dsh-ssh-guard
 
 ### 路线 C：GitHub Release 附件（不需要 npm 账号）
 
-由 GitHub Actions 构建 `dist/` 并打成 tar.gz 挂到 Release；使用者下载解包后：
+由 `.github/workflows/release.yml` 装配后 `npm pack` 成 `.tgz` 挂到 Release（见仓库右侧 Releases）：
 
 ```bash
-dsh plugin --profile <你的档> add link:<解包目录>
-```
-
-（需要一个 release 工作流来启用，见「自动化」。）
-
-**已实测的更好做法（推荐用于路线 C）**：Release 里放的是 **`npm pack` 出来的 `.tgz`**（不是在解包目录上 `link:`），
-使用者一条命令装：
-
-```bash
+# 1) 打开本仓库 Releases 页面（或仓库右侧 Releases），下载 dsh-ssh-guard-<版本>.tgz
+# 2) 一条命令安装（file: 指向下载下来的 tgz；本仓库已实测通过）
 dsh plugin --profile <你的档> add file:<下载路径>/dsh-ssh-guard-<版本>.tgz
 ```
+
+**为什么必须是 `.tgz` 而不是"下载目录后 `link:`"（本仓库已实测）**：`link:` 的真实路径在使用者档**外**，
+ESM 向上解析到不了 `profiles/node_modules`，所以**要求使用者本机装配**；`.tgz` 会被 pnpm 解到档内的
+`.pnpm` 存储，真实路径仍在档**内** → **零构建**即可用。实测：安装成功 → 真启动 → `GET /api/dsh-ssh/hosts` 返回 **200**。
 
 **为什么 tgz 比 `link:` 好**：tgz 会被 pnpm 解到**该档自己的** `node_modules/.pnpm/`，真实路径仍在档内 →
 ESM 能向上解析到 `profiles/node_modules/@deepseek-ai/dsh-tools`，所以 **CI 模式（`--no-host-link`）产出的包也能直接装**，
@@ -137,6 +134,15 @@ npm run smoke
 → **真启动一次**（`--port 0 --no-open`）→ 再**打插件自身的路由** `/api/dsh-ssh/hosts` 确认
 **插件真的被加载**（只验"服务器起来了"会假绿）→ 杀进程树 → 删除临时档。加 `--keep` 保留临时档便于排查。
 
+### 装完排错
+
+| 症状 | 原因 | 处理 |
+|---|---|---|
+| `ERR_PNPM_IGNORED_BUILDS`（ssh2 / cpu-features） | 从 npm/tgz 安装会**真的装依赖**，而 pnpm 默认不信任构建脚本 | 在该档的 `pnpm-workspace.yaml` 加 `allowBuilds:`（`cpu-features: true` / `ssh2: true`；官方 profile 本来就有） |
+| `ERR_MODULE_NOT_FOUND: @deepseek-ai/dsh-tools` | `link:` 挂载的包**真实路径在档外**，向上解析不到宿主包 | 在本机重新装配（`npm run assemble`，第 5.5 步会建宿主链接）；或改用 npm/tgz 安装 |
+| 侧边栏没有「SSH」入口 | 插件没被加载，或装了但没重启 | ① 确认该档 `dsh.profile.bundles` 里有包名（`dsh plugin add` 会自动写）；② **重启该档 DSH** |
+| 启动报"同名工具重复注册" | 同时装了 `dsh-ssh-ops` 或上游 `@linxin666/dsh-ssh` | 三者只能留一个（移除或 `disabled: true`） |
+| 想自测"装得上" | —— | `npm run smoke`（测 `link:` 路线）；`npm run smoke -- --tgz <tgz>`（测 tgz 路线） |
 ## 装配（从源码构建 `dist/`）（开发者；使用者请看上面的「安装到 DSH」）
 
 ```bash
