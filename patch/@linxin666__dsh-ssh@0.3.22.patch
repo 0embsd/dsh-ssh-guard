@@ -1,6 +1,6 @@
 diff --git a/lib/conn-budget.js b/lib/conn-budget.js
 new file mode 100644
-index 0000000000000000000000000000000000000000..204a2c9457cb23273fcf2cdf70547a765bb2b883
+index 0000000..c974ba7
 --- /dev/null
 +++ b/lib/conn-budget.js
 @@ -0,0 +1,254 @@
@@ -260,7 +260,7 @@ index 0000000000000000000000000000000000000000..204a2c9457cb23273fcf2cdf70547a76
 +}
 diff --git a/lib/hostkey-guard.js b/lib/hostkey-guard.js
 new file mode 100644
-index 0000000000000000000000000000000000000000..ceebdbd9313b7adfecf3a46a76ec075226fe8d76
+index 0000000..0e105df
 --- /dev/null
 +++ b/lib/hostkey-guard.js
 @@ -0,0 +1,185 @@
@@ -450,10 +450,10 @@ index 0000000000000000000000000000000000000000..ceebdbd9313b7adfecf3a46a76ec0752
 +  }
 +}
 diff --git a/lib/index.js b/lib/index.js
-index d2d23cc83e8b90c433b0ffae6086eca996508f2f..06585c93d272240fc82a353f91d5f58687608ae3 100644
+index dbd03ed..804301f 100644
 --- a/lib/index.js
 +++ b/lib/index.js
-@@ -6,6 +6,8 @@ import { isAbsolute as isAbsolute$1, join as join$1 } from "node:path/posix";
+@@ -8,6 +8,8 @@ import { Duplex } from "node:stream";
  import { createServer } from "node:net";
  import { unlink } from "node:fs/promises";
  import { randomBytes } from "node:crypto";
@@ -462,7 +462,7 @@ index d2d23cc83e8b90c433b0ffae6086eca996508f2f..06585c93d272240fc82a353f91d5f586
  import { WebSocket, WebSocketServer } from "ws";
  import { defineTool } from "@deepseek-ai/dsh-tools";
  //#region \0rolldown/runtime.js
-@@ -1397,6 +1399,13 @@ const DEFAULTS = {
+@@ -1735,6 +1737,13 @@ const DEFAULTS = {
  	maxOutputBytes: 2 * 1024 * 1024,
  	defaultExecTimeoutMs: 6e4,
  	defaultMaxWorkers: 8,
@@ -476,7 +476,7 @@ index d2d23cc83e8b90c433b0ffae6086eca996508f2f..06585c93d272240fc82a353f91d5f586
  	sftpConcurrency: 8
  };
  /** Build the ssh2 connect config for one entry (key read from disk). */
-@@ -1422,6 +1431,12 @@ function buildConnectConfig(entry, sock, opts) {
+@@ -1760,6 +1769,12 @@ function buildConnectConfig(entry, sock, opts) {
  		config.privateKey = readFileSync(keyPath, "utf8");
  		if (entry.auth.passphrase !== void 0 && entry.auth.passphrase !== "") config.passphrase = entry.auth.passphrase;
  	}
@@ -489,7 +489,7 @@ index d2d23cc83e8b90c433b0ffae6086eca996508f2f..06585c93d272240fc82a353f91d5f586
  	return config;
  }
  /** Resolve the ssh2 agent path for 'agent' auth. */
-@@ -1544,6 +1559,8 @@ async function acquire(engine, alias) {
+@@ -1982,6 +1997,8 @@ async function acquire(engine, alias) {
  async function doAcquire(engine, alias) {
  	const entry = engine.store.find(alias);
  	if (entry === void 0) throw new Error("alias '" + alias + "' not found — add it first");
@@ -498,7 +498,7 @@ index d2d23cc83e8b90c433b0ffae6086eca996508f2f..06585c93d272240fc82a353f91d5f586
  	const { client, hops } = await connectChain(engine, entry);
  	const record = {
  		client,
-@@ -1592,12 +1609,25 @@ function sweepPool(engine) {
+@@ -2030,12 +2047,25 @@ function sweepPool(engine) {
  * Run `fn` with a live client for `alias`, reconnecting (up to the
  * attempt budget) when the connection broke mid-flight.
  */
@@ -525,7 +525,7 @@ index d2d23cc83e8b90c433b0ffae6086eca996508f2f..06585c93d272240fc82a353f91d5f586
  			record = await acquire(engine, alias);
  		}
  		record.idleAt = Date.now();
-@@ -2153,6 +2183,9 @@ var SshEngine = class {
+@@ -2595,6 +2625,9 @@ var SshEngine = class {
  			...DEFAULTS,
  			...options
  		};
@@ -535,3 +535,124 @@ index d2d23cc83e8b90c433b0ffae6086eca996508f2f..06585c93d272240fc82a353f91d5f586
  		this.sweepTimer = setInterval(() => sweepPool(this), Math.max(1e4, this.opts.idleTimeoutMs / 4));
  		this.sweepTimer.unref?.();
  	}
+@@ -3098,27 +3131,54 @@ function makeRoutes(deps) {
+ 						writeJson(res, 413, { error: "upload body too large" });
+ 						return;
+ 					}
+-					res.writeHead(200, {
+-						"content-type": "application/x-ndjson; charset=utf-8",
+-						"cache-control": "no-cache",
+-						"referrer-policy": "no-referrer"
+-					});
+-					const emit = (line) => {
+-						try {
+-							res.write(JSON.stringify(line) + "\n");
+-						} catch {}
+-					};
++					// [guard-fork N-A18] 上游在任何远端写入之前就发出 200 ⇒ 只认状态码的调用方把"写不进去"当成功。
++// 修法：把 200 推迟到**首次真实进度帧**之前一刻；在此之前的失败一律走**非 2xx + JSON 错误体**。
++const ndjsonHeaders = {
++  "content-type": "application/x-ndjson; charset=utf-8",
++  "cache-control": "no-cache",
++  "referrer-policy": "no-referrer"
++};
++let streamStarted = false;
++const pendingLines = [];
++const startStream = () => {
++  if (streamStarted) return;
++  streamStarted = true;
++  res.writeHead(200, ndjsonHeaders);
++  for (const line of pendingLines) {
++    try {
++      res.write(JSON.stringify(line) + "\n");
++    } catch {}
++  }
++  pendingLines.length = 0;
++};
++const emit = (line) => {
++  if (!streamStarted) {
++    pendingLines.push(line);
++    return;
++  }
++  try {
++    res.write(JSON.stringify(line) + "\n");
++  } catch {}
++};
+ 					const tmp = join(staging, `upload-${randomBytes(6).toString("hex")}`);
+ 					const sink = createWriteStream(tmp, { mode: 384 });
+ 					let settled = false;
+ 					const fail = (error) => {
+-						if (settled) return;
+-						settled = true;
+-						emit({
+-							type: "result",
+-							ok: false,
+-							error: error instanceof Error ? error.message : String(error)
+-						});
++  if (settled) return;
++  settled = true;
++  // [guard-fork N-A18] 响应头还没发 ⇒ 用**非 2xx + JSON 错误体**表达失败（可被只认状态码的调用方判定）。
++  if (!streamStarted) {
++    const msg = error instanceof Error ? error.message : String(error);
++    try {
++      writeJson(res, 502, { error: msg });
++    } catch {}
++  } else {
++    emit({
++      type: "result",
++      ok: false,
++      error: error instanceof Error ? error.message : String(error)
++    });
++  }
+ 						const cleanup = () => {
+ 							unlink(tmp).catch(() => void 0).finally(() => {
+ 								try {
+@@ -3179,22 +3239,35 @@ function makeRoutes(deps) {
+ 							}
+ 						});
+ 						try {
+-							const outcome = await engine.upload(alias, tmp, remotePath, false, (progress) => emit({
+-								type: "progress",
+-								progress
+-							}));
+-							emit({
+-								type: "result",
+-								ok: true,
++							const outcome = await engine.upload(alias, tmp, remotePath, false, (progress) => {
++  // 只有**真的写进去了字节**才起流：0 字节的 connecting/transferring 帧不足以证明远端可写
++  //   （实测 /proc/** 会先来一帧 transferring(0) 再失败；若据此起流，失败又退回流内 ⇒ 判据失效）
++  if (Number(progress && progress.transferred) > 0) startStream();
++  emit({
++    type: "progress",
++    progress
++  });
++});
++							startStream();
++emit({
++  type: "result",
++  ok: true,
+ 								transferredBytes: outcome.bytes
+ 							});
+ 						} catch (error) {
+-							emit({
+-								type: "result",
+-								ok: false,
+-								error: error instanceof Error ? error.message : String(error)
+-							});
+-						} finally {
++  if (!streamStarted) {
++    settled = true;
++    try {
++      writeJson(res, 502, { error: error instanceof Error ? error.message : String(error) });
++    } catch {}
++  } else {
++    emit({
++      type: "result",
++      ok: false,
++      error: error instanceof Error ? error.message : String(error)
++    });
++  }
++} finally {
+ 							await unlink(tmp).catch(() => void 0);
+ 							done();
+ 						}

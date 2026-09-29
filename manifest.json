@@ -15,7 +15,7 @@
         { "file": "lib/hostkey-guard.js", "pattern": "known_hosts", "min": 7 }
       ],
       "files": {
-        "lib/index.js": "8f733b6bc75fdb216102adefb9b4035d26923030c33ab384cac75c85d7232c6e",
+        "lib/index.js": "b3da66345e6abb6b356cd4062ef513031ba31dc67af418fc3ebca92700bd29b1",
         "lib/conn-budget.js": "3f4034960bc4cae742e0f995d66a9be13b0a5dad215bd5e2493c7e86c0cafb5a",
         "lib/hostkey-guard.js": "8c1d3ed7842d95b9081a38a09bc7e25be3ec388c8346c3970c92393679cebf03"
       },

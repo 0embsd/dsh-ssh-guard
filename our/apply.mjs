@@ -48,6 +48,13 @@ const AUTHOR = String(args.author ?? '')
 const NO_FORK = args['no-fork'] === true
 const KEEP_HEARTBEAT = args['keep-heartbeat'] === true
 const REFRESH_DEPS = args['refresh-deps'] === true
+// 离线依赖来源（2026-09-29 新增，N-A18 修复过程中实测到的硬缺口）：
+//   实测本机 registry（npmmirror）**不可达**（5s 超时），[5.5] 的 `npm install` 于是**死等**
+//   （进程 17 分钟只耗 0.3s CPU）⇒ 装配卡死，而 dist/ 已被第 ① 步清空 ⇒ 连"冒烟/活体验收"都做不了。
+//   给了 `--deps-from <dir>`（或 env OUR_DEPS_FROM）时：缺的依赖**从该目录整树复制**，跳过 npm；
+//   复制后仍走原有的"依赖必须落进 dist/node_modules"断言（L242）——即**不降低自包含判据**，
+//   只是换了个来源。目录不存在 ⇒ 直接 fail-closed（不静默回落到 npm，避免又死等一次）。
+const DEPS_FROM = String(args['deps-from'] ?? process.env.OUR_DEPS_FROM ?? '')
 // CI 模式：GitHub Actions 的 runner 上没有本机的 DSH 安装树，无法把宿主包链进 dist/node_modules。
 // 打开本开关则**跳过宿主链接**，其余步骤（⓪ 门禁、五道断言、依赖自包含的 npm 部分、归属/声明）照跑，
 // 因此"产物哈希等价性"在 CI 里依然被验证；完整可挂载的 dist 仍在本机装配时产出。
@@ -233,7 +240,24 @@ if (!NO_FORK) {
   const depInfo = { npmInstalled: [], hostLinked: [] }
   if (depNames.length > 0) {
     const missing = depNames.filter((d) => !existsSync(join(nm, d)))
-    if (REFRESH_DEPS || missing.length > 0) {
+    if (missing.length > 0 && DEPS_FROM !== '') {
+      // 离线来源：**整树复制**（不碰已有的），随后由下面的断言统一核对直接依赖是否落地。
+      // 为什么必须整树而不是只拷缺的直接依赖：本轮冒烟实测——只拷 ssh2 会漏掉它的**传递依赖**
+      // （asn1 / bcrypt-pbkdf / safer-buffer / tweetnacl / cpu-features / nan…，pnpm 把它们提升到
+      //  profile 顶层）⇒ 启动即 `Cannot find module 'asn1'`（install-smoke 当场判红）。
+      // 宿主 peer（@deepseek-ai/*）**跳过**：它由 [5.5] 后半段的宿主链接负责，拷进来反而会挡住 linkDir。
+      if (!existsSync(DEPS_FROM)) die(`--deps-from 目录不存在：${DEPS_FROM}`)
+      log(`    离线依赖来源（跳过 npm）：${DEPS_FROM}；缺 ${missing.length} 个 -> ${missing.join(', ')}`)
+      ensureDir(nm)
+      let copied = 0
+      for (const entry of readdirSync(DEPS_FROM)) {
+        if (entry === '@deepseek-ai') continue
+        if (existsSync(join(nm, entry))) continue
+        copyTree(join(DEPS_FROM, entry), join(nm, entry))
+        copied++
+      }
+      ok(`已从离线来源复制 ${copied} 个条目（含传递依赖；跳过 @deepseek-ai 由宿主链接负责）`)
+    } else if (REFRESH_DEPS || missing.length > 0) {
       log('    安装运行期依赖到 dist/node_modules（npm --omit=dev）...')
       const r = npmRun(['install', '--omit=dev', '--no-audit', '--no-fund', '--loglevel=error'], { cwd: dist })
       if (r.code !== 0) die(`npm install 失败（rc=${r.code}）：\n${r.out}`)
