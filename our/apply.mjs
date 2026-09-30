@@ -259,7 +259,14 @@ if (!NO_FORK) {
       ok(`已从离线来源复制 ${copied} 个条目（含传递依赖；跳过 @deepseek-ai 由宿主链接负责）`)
     } else if (REFRESH_DEPS || missing.length > 0) {
       log('    安装运行期依赖到 dist/node_modules（npm --omit=dev）...')
-      const r = npmRun(['install', '--omit=dev', '--no-audit', '--no-fund', '--loglevel=error'], { cwd: dist })
+      // 为什么必须带 --legacy-peer-deps（2026-09-30 集成 0.4.0 实测）：
+      // 0.4.0 起上游把 `@deepseek-ai/dsh` 声明成了 peerDependency，而 npm>=7 默认**自动安装 peer**
+      // ⇒ 这一句会去装整棵 DSH 内核：实测本机落盘 283 个 @deepseek-ai 包 / 27070 文件 / 489MB；
+      //   CI runner（ubuntu / node22）更直接崩在 Arborist：`Cannot read properties of null (reading 'edgesOut')`，
+      //   于是装配在第 [5.5] 步退出 1、Release 从未发出。
+      // 设计上宿主包本来就由下面 [5.5] 后半段的宿主链接负责，**npm 不该装 peer**，所以明确关掉。
+      // 实测三种写法的代价：--legacy-peer-deps 6s 通过；--omit=peer 仍要解析 peer 树 422s；不加则挂住/崩。
+      const r = npmRun(['install', '--omit=dev', '--legacy-peer-deps', '--no-audit', '--no-fund', '--loglevel=error'], { cwd: dist })
       if (r.code !== 0) die(`npm install 失败（rc=${r.code}）：\n${r.out}`)
     }
     for (const d of depNames) {
